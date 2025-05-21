@@ -1,0 +1,5 @@
+fastapi~=0.115.3
+haversine~=2.9.0
+pyproj~=3.7.1
+requests~=2.32.2
+uvicorn~=0.32.1
