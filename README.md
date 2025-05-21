@@ -42,3 +42,6 @@ For more details, see the API documentation at `/docs` after launching the serve
    1. Validate upcoming data from "API adresse" of French government
    2. Uniformize data in API responses
 3. Build some pipelines with GitHub Actions for linting, code coverage, type checking, etc.
+4. Cache data from local CSV file smartly, e.g.:
+   1. By storing directly converted coordinates to WSG 84.
+   2. By storing a dict mapping operator to coordinates and network coverage.

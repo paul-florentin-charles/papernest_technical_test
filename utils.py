@@ -1,7 +1,7 @@
 from pyproj import Transformer
 
 
-def lambert93_to_gps(lon: float, lat: float):
+def lambert93_to_wsg84(lon: float, lat: float):
     """
     Convert Lambert 93 (EPSG:2154) coordinates to WGS84 (longitude, latitude).
     """

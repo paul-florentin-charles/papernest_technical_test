@@ -1,13 +1,13 @@
-import csv
 import math
 import os
 from typing import Any
 
+import pandas as pd
 import requests
 from fastapi import FastAPI, HTTPException, Query
 from haversine import haversine
 
-from utils import lambert93_to_gps
+from utils import lambert93_to_wsg84
 
 # Location of CSV file mapping operator and coordinates to network coverage
 CSV_PATH = os.path.join(
@@ -25,8 +25,8 @@ OPERATOR_NAME_BY_CODE: dict[int, str] = {
 ALL_KNOWN_OPERATOR: set[str] = set(OPERATOR_NAME_BY_CODE.values())
 
 # Coverage area limits
-MAX_ALLOWED_DISTANCE_KM = 20.0  # wider area, e.g., agglomeration
-SATISFACTORY_DISTANCE_KM = 5.0  # city-like coverage
+MAX_ALLOWED_DISTANCE_KM = 20.0  # over this distance, we ignore coverage
+SATISFACTORY_DISTANCE_KM = 5.0  # "big" city radius, coverage is good enough
 
 app = FastAPI(
     title="Mobile Network Coverage API",
@@ -54,63 +54,66 @@ def get_network_coverage(
         raise HTTPException(status_code=404, detail="Address not found")
 
     # We retrieve coordinates from the first fit that is the best fit (results are sorted by decreasing 'score')
-    coords = features[0]["geometry"]["coordinates"]  # [longitude, latitude]
+    coords: tuple[float, float] = features[0]["geometry"][
+        "coordinates"
+    ]  # [longitude, latitude]
     api_lon, api_lat = coords[0], coords[1]
 
     operator_best: dict[str, dict] = {}
     operators_found: set[str] = set()
-    with open(CSV_PATH, newline="", encoding="utf-8") as csvfile:
-        reader = csv.DictReader(csvfile, delimiter=";")
-        for row in reader:
-            # Stop if all known operators have had selected coordinates for network coverage
-            if operators_found == ALL_KNOWN_OPERATOR:
-                break
+    for row in pd.read_csv(CSV_PATH, dtype=str, sep=";", encoding="utf-8").to_dict(
+        orient="records"
+    ):
+        # Stop if all known operators have had selected coordinates for network coverage
+        if operators_found == ALL_KNOWN_OPERATOR:
+            break
 
-            try:
-                operator_name = OPERATOR_NAME_BY_CODE[int(row["Operateur"])]
-            except ValueError:
-                raise ValueError(
-                    f"Operator code should be an int or numeric string in CSV, we were given: {row['Operateur']}."
-                )
-            except KeyError:
-                raise KeyError(
-                    f"Unknown operator code in CSV: {row['Operateur']}, it should belong to {OPERATOR_NAME_BY_CODE.keys()}."
-                )
+        try:
+            operator_name = OPERATOR_NAME_BY_CODE[int(row["Operateur"])]
+        except ValueError:
+            raise ValueError(
+                f"Operator code should be an int or numeric string in CSV, we were given: {row['Operateur']}."
+            )
+        except KeyError:
+            raise KeyError(
+                f"Unknown operator code in CSV: {row['Operateur']}, it should belong to {OPERATOR_NAME_BY_CODE.keys()}."
+            )
 
-            # We've already found fitting coordinates for this operator
-            if operator_name in operators_found:
+        # We've already found fitting coordinates for this operator
+        if operator_name in operators_found:
+            continue
+
+        # We extract longitude and latitude from the row
+        try:
+            x = float(row["x"])  # longitude
+            y = float(row["y"])  # latitude
+
+            if math.isnan(x) or math.isnan(y):  # Ignore incorrect coordinates
                 continue
+        except (ValueError, TypeError):  # Ignore incorrect coordinates
+            continue
 
-            # We extract longitude and latitude from the row
-            try:
-                x = float(row["x"])  # longitude
-                y = float(row["y"])  # latitude
-                if math.isnan(x) or math.isnan(y):  # Ignore incorrect coordinates
-                    continue
-            except (ValueError, TypeError):  # Ignore incorrect coordinates
-                continue
+        lon, lat = lambert93_to_wsg84(x, y)
+        dist = haversine((api_lat, api_lon), (lat, lon))
+        if dist > MAX_ALLOWED_DISTANCE_KM:  # Ignore when distance is too "big"
+            continue
 
-            lon, lat = lambert93_to_gps(x, y)
-            dist = haversine((api_lat, api_lon), (lat, lon))
-            if dist > MAX_ALLOWED_DISTANCE_KM:  # Ignore "big" distances
-                continue
-
-            if (
-                operator_name not in operator_best
-                or dist < operator_best[operator_name]["distance_km"]
-            ):
-                operator_best[operator_name] = {
-                    "distance_km": round(dist, 1),  # 100 meters precision
-                    "csv_coords_lambert93": {"x": x, "y": y},
-                    "csv_coords_gps": {"lon": lon, "lat": lat},
-                    "coverage": {
-                        "2G": bool(int(row["2G"])),
-                        "3G": bool(int(row["3G"])),
-                        "4G": bool(int(row["4G"])),
-                    },
-                }
-                if dist <= SATISFACTORY_DISTANCE_KM:
-                    operators_found.add(operator_name)
+        if (
+            operator_name not in operator_best
+            or dist < operator_best[operator_name]["distance_km"]
+        ):
+            operator_best[operator_name] = {
+                "distance_km": round(dist, 1),  # 100 meters precision
+                "csv_coords_lambert93": {"x": x, "y": y},
+                "csv_coords_gps": {"lon": lon, "lat": lat},
+                "coverage": {
+                    "2G": bool(int(row["2G"])),
+                    "3G": bool(int(row["3G"])),
+                    "4G": bool(int(row["4G"])),
+                },
+            }
+            if dist <= SATISFACTORY_DISTANCE_KM:
+                operators_found.add(operator_name)
 
     if not operator_best:
         raise HTTPException(
@@ -122,14 +125,14 @@ def get_network_coverage(
 
 
 @app.get(
-    "/address_from_gps_coords",
-    summary="Returns address information for given GPS coordinates.",
+    "/address_from_wsg84",
+    summary="Returns address information for given WGS 84 coordinates.",
     description="Returns address information for given longitude and latitude. "
     "Useful for checking the best coordinate fits from the coverage endpoint.",
 )
-def get_address_from_gps(
-    lon: float = Query(..., description="Longitude in decimal degrees (WGS84)"),
-    lat: float = Query(..., description="Latitude in decimal degrees (WGS84)"),
+def get_address_from_wsg84(
+    lon: float = Query(..., description="Longitude in decimal degrees (WGS 84)"),
+    lat: float = Query(..., description="Latitude in decimal degrees (WGS 84)"),
 ):
     resp = requests.get(
         f"https://api-adresse.data.gouv.fr/reverse/?lon={lon}&lat={lat}"
