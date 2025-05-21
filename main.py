@@ -1,5 +1,7 @@
+import json
 import math
 import os
+from collections import defaultdict
 from typing import Any
 
 import pandas as pd
@@ -28,6 +30,52 @@ ALL_KNOWN_OPERATOR: set[str] = set(OPERATOR_NAME_BY_CODE.values())
 MAX_ALLOWED_DISTANCE_KM = 20.0  # over this distance, we ignore coverage
 SATISFACTORY_DISTANCE_KM = 5.0  # "big" city radius, coverage is good enough
 
+# --- CSV cache for operator code to list of coverage dicts ---
+CACHE_FILE_PATH = os.path.join("cache", "operator_coverage_cache.json")
+
+
+def load_operator_coverage_cache():
+    # Try loading existing cache file first
+    if os.path.exists(CACHE_FILE_PATH):
+        with open(CACHE_FILE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    data_to_cache: dict[str, list[dict]] = defaultdict(list)
+    for row in pd.read_csv(CSV_PATH, dtype=str, sep=";", encoding="utf-8").to_dict(
+        orient="records"
+    ):
+        x, y = row["x"], row["y"]
+        try:
+            x = float(x)
+            y = float(y)
+            if math.isnan(x) or math.isnan(y):
+                continue
+        except (ValueError, TypeError):
+            continue
+
+        lon, lat = lambert93_to_wsg84(x, y)
+        coverage = {
+            "2G": bool(int(row["2G"])),
+            "3G": bool(int(row["3G"])),
+            "4G": bool(int(row["4G"])),
+        }
+
+        data_to_cache[row["Operateur"]].append(
+            {
+                "csv_coords_lambert93": {"lon": x, "lat": y},
+                "csv_coords_gps": {"lon": lon, "lat": lat},
+                "coverage": coverage,
+            }
+        )
+
+    # Save cache as JSON file while creating directory if not existing
+    os.makedirs(os.path.dirname(CACHE_FILE_PATH), exist_ok=True)
+    with open(CACHE_FILE_PATH, "w", encoding="utf-8") as f:
+        json.dump(data_to_cache, f)
+
+    return data_to_cache
+
+
 app = FastAPI(
     title="Mobile Network Coverage API",
     description="API to query mobile network coverage by operator and technology (2G/3G/4G) for a given address using French government open data.",
@@ -53,67 +101,48 @@ def get_network_coverage(
     if not features:
         raise HTTPException(status_code=404, detail="Address not found")
 
-    # We retrieve coordinates from the first fit that is the best fit (results are sorted by decreasing 'score')
     coords: tuple[float, float] = features[0]["geometry"][
         "coordinates"
     ]  # [longitude, latitude]
     api_lon, api_lat = coords[0], coords[1]
 
     operator_best: dict[str, dict] = {}
-    operators_found: set[str] = set()
-    for row in pd.read_csv(CSV_PATH, dtype=str, sep=";", encoding="utf-8").to_dict(
-        orient="records"
-    ):
-        # Stop if all known operators have had selected coordinates for network coverage
-        if operators_found == ALL_KNOWN_OPERATOR:
-            break
-
+    for operator_code, entries in load_operator_coverage_cache().items():
         try:
-            operator_name = OPERATOR_NAME_BY_CODE[int(row["Operateur"])]
+            operator_name = OPERATOR_NAME_BY_CODE[int(operator_code)]
         except ValueError:
             raise ValueError(
-                f"Operator code should be an int or numeric string in CSV, we were given: {row['Operateur']}."
+                f"Operator code should be an int or numeric string in CSV, we were given: {operator_code}."
             )
         except KeyError:
             raise KeyError(
-                f"Unknown operator code in CSV: {row['Operateur']}, it should belong to {OPERATOR_NAME_BY_CODE.keys()}."
+                f"Unknown operator code in CSV: {operator_code}, it should belong to {OPERATOR_NAME_BY_CODE.keys()}."
             )
 
-        # We've already found fitting coordinates for this operator
-        if operator_name in operators_found:
-            continue
-
-        # We extract longitude and latitude from the row
-        try:
-            x = float(row["x"])  # longitude
-            y = float(row["y"])  # latitude
-
-            if math.isnan(x) or math.isnan(y):  # Ignore incorrect coordinates
+        for entry in entries:
+            entry_coords: dict[str, float] = entry["csv_coords_gps"]
+            distance = haversine(
+                (api_lat, api_lon), (entry_coords["lat"], entry_coords["lon"])
+            )
+            if distance > MAX_ALLOWED_DISTANCE_KM:
                 continue
-        except (ValueError, TypeError):  # Ignore incorrect coordinates
-            continue
 
-        lon, lat = lambert93_to_wsg84(x, y)
-        dist = haversine((api_lat, api_lon), (lat, lon))
-        if dist > MAX_ALLOWED_DISTANCE_KM:  # Ignore when distance is too "big"
-            continue
+            if operator_name in operator_best:
+                if distance < operator_best[operator_name]["distance_km"] > distance:
+                    operator_best[operator_name] = {
+                        "distance_km": distance,
+                        "csv_coords_gps": entry["csv_coords_gps"],
+                        "coverage": entry["coverage"],
+                    }
+            else:
+                operator_best[operator_name] = {
+                    "distance_km": distance,
+                    "csv_coords_gps": entry["csv_coords_gps"],
+                    "coverage": entry["coverage"],
+                }
 
-        if (
-            operator_name not in operator_best
-            or dist < operator_best[operator_name]["distance_km"]
-        ):
-            operator_best[operator_name] = {
-                "distance_km": round(dist, 1),  # 100 meters precision
-                "csv_coords_lambert93": {"x": x, "y": y},
-                "csv_coords_gps": {"lon": lon, "lat": lat},
-                "coverage": {
-                    "2G": bool(int(row["2G"])),
-                    "3G": bool(int(row["3G"])),
-                    "4G": bool(int(row["4G"])),
-                },
-            }
-            if dist <= SATISFACTORY_DISTANCE_KM:
-                operators_found.add(operator_name)
+            if distance <= SATISFACTORY_DISTANCE_KM:
+                break  # Found a good enough distance, move to next operator
 
     if not operator_best:
         raise HTTPException(

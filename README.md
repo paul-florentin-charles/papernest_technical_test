@@ -2,6 +2,16 @@
 
 API service build with **FastAPI** exposing network coverage by operator.
 
+Data is retrieved from 2 sources:
+- [API adresse](https://www.data.gouv.fr/fr/dataservices/api-adresse-base-adresse-nationale-ban/)
+- Local CSV file matching mobile operators, coordinates and network coverage (2G/3G/4G)
+
+We are caching CSV data as a JSON file sorting coordinates and network coverage by operator.
+By default, it is stored in `./cache/operator_coverage_cache.json`, but you can remove it if you want to regenerate it, 
+although its content shouldn't change, except if you modify the original CSV file.
+
+Its generation happens when calling the `GET /network_coverage?addr=ADDRESS` route with any address.
+
 ## Running instructions
 
 ### Launch the API
@@ -42,6 +52,3 @@ For more details, see the API documentation at `/docs` after launching the serve
    1. Validate upcoming data from "API adresse" of French government
    2. Uniformize data in API responses
 3. Build some pipelines with GitHub Actions for linting, code coverage, type checking, etc.
-4. Cache data from local CSV file smartly, e.g.:
-   1. By storing directly converted coordinates to WSG 84.
-   2. By storing a dict mapping operator to coordinates and network coverage.
