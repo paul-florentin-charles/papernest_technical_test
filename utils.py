@@ -39,7 +39,7 @@ def lambert93_to_wsg84(lon: float, lat: float):
     return Transformer.from_crs(lambert, wsg84).transform(lon, lat)
 
 
-def load_operator_coverage_cache():
+def load_operator_to_network_coverage_cache():
     # Try loading existing cache file first
     if os.path.exists(CACHE_FILE_PATH):
         with open(CACHE_FILE_PATH, "r", encoding="utf-8") as f:

@@ -41,6 +41,12 @@ Its generation happens when calling the `GET /network_coverage?addr=ADDRESS` rou
   - Returns address information for given GPS coordinates.
   - Example: `http://127.0.0.1:8000/address_from_gps_coords?lon=2.2945&lat=48.8584`
 
+## Run tests
+
+```bash
+pytest tst/
+```
+
 ---
 
 For more details, see the API documentation at `/docs` after launching the server.
@@ -52,3 +58,4 @@ For more details, see the API documentation at `/docs` after launching the serve
    1. Validate upcoming data from "API adresse" of French government
    2. Uniformize data in API responses
 3. Build some pipelines with GitHub Actions for linting, code coverage, type checking, etc.
+4. Use a NoSQL database for data caching

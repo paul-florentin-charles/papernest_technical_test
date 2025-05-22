@@ -8,7 +8,7 @@ from utils import (
     MAX_ALLOWED_DISTANCE_KM,
     OPERATOR_NAME_BY_CODE,
     SATISFACTORY_DISTANCE_KM,
-    load_operator_coverage_cache,
+    load_operator_to_network_coverage_cache,
 )
 
 app = FastAPI(
@@ -34,7 +34,7 @@ def get_network_coverage(
 
     features = resp.json().get("features")
     if not features:
-        raise HTTPException(status_code=404, detail="Address not found")
+        raise HTTPException(status_code=404, detail="Address not found.")
 
     coords: tuple[float, float] = features[0]["geometry"][
         "coordinates"
@@ -42,7 +42,7 @@ def get_network_coverage(
     api_lon, api_lat = coords[0], coords[1]
 
     operator_best: dict[str, dict] = {}
-    for operator_code, entries in load_operator_coverage_cache().items():
+    for operator_code, entries in load_operator_to_network_coverage_cache().items():
         try:
             operator_name = OPERATOR_NAME_BY_CODE[int(operator_code)]
         except ValueError:
@@ -106,7 +106,7 @@ def get_address_from_wsg84(
     features = resp.json().get("features")
     if not features:
         raise HTTPException(
-            status_code=404, detail="No address found for these coordinates"
+            status_code=404, detail="No address found for these coordinates."
         )
 
     # Get properties from the best fit
